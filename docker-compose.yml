@@ -1,0 +1,189 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+      - nginx_cache:/tmp/nginx_cache
+    depends_on:
+      - app1
+      - app2
+      - app3
+      - grafana
+      - prometheus
+    networks:
+      - monitoring
+
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - ./nginx/ssl:/etc/letsencrypt
+      - ./nginx/www:/var/www/certbot
+    command: certonly --webroot --webroot-path=/var/www/certbot --email admin@hr-erp.ru -d hr-erp.ru -d www.hr-erp.ru --agree-tos --no-eff-email --force-renewal
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+  app1:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-hr-erp}:${TAG:-main}
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - ERROR_NOTIFICATION_EMAIL=${ERROR_NOTIFICATION_EMAIL}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - /var/log/hr-erp:/app/logs
+    depends_on:
+      - prometheus
+      - grafana
+    networks:
+      - monitoring
+
+  app2:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-hr-erp}:${TAG:-main}
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - ERROR_NOTIFICATION_EMAIL=${ERROR_NOTIFICATION_EMAIL}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - /var/log/hr-erp:/app/logs
+    depends_on:
+      - prometheus
+      - grafana
+    networks:
+      - monitoring
+
+  app3:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-hr-erp}:${TAG:-main}
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - ERROR_NOTIFICATION_EMAIL=${ERROR_NOTIFICATION_EMAIL}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - /var/log/hr-erp:/app/logs
+    depends_on:
+      - prometheus
+      - grafana
+    networks:
+      - monitoring
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: always
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring
+
+  backup:
+    image: alpine:latest
+    volumes:
+      - prometheus_data:/backup/prometheus
+      - grafana_data:/backup/grafana
+      - nginx_logs:/backup/nginx_logs
+      - ./backups:/backup/local
+    command: >
+      /bin/sh -c '
+        while true; do
+          timestamp=$$(date +%Y%m%d_%H%M%S);
+          tar -czf /backup/local/prometheus_$${timestamp}.tar.gz /backup/prometheus;
+          tar -czf /backup/local/grafana_$${timestamp}.tar.gz /backup/grafana;
+          tar -czf /backup/local/nginx_logs_$${timestamp}.tar.gz /backup/nginx_logs;
+          find /backup/local -type f -mtime +7 -delete;
+          sleep 86400;
+        done
+      '
+    networks:
+      - monitoring
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  nginx_logs:
+  nginx_cache:
+
+networks:
+  monitoring:
+    driver: bridge 
